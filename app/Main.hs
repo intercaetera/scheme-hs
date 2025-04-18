@@ -8,11 +8,11 @@ import Numeric
 data LispVal = Atom String
              | List [LispVal]
              | DottedList [LispVal] LispVal
-             | Integer Integer
-             | Float Double
+             | Number Integer
              | String String
              | Bool Bool
-             deriving Show
+
+instance Show LispVal where show = showVal
 
 symbol :: Parser Char
 symbol = oneOf "!$%&|*+-/:<=>?@^_~"
@@ -55,18 +55,8 @@ parseAtom = do
              "#f" -> Bool False
              _ -> Atom atom
 
-parseFloat :: Parser LispVal
-parseFloat = do
-  x <- many1 digit
-  char '.'
-  y <- many1 digit
-  return $ Float (fst . head $ readFloat $ x ++ "." ++ y)
-
-parseInteger :: Parser LispVal
-parseInteger = Integer . read <$> many1 digit
-
 parseNumber :: Parser LispVal
-parseNumber = parseFloat <|> parseInteger
+parseNumber = Number . read <$> many1 digit
 
 parseNormalList :: Parser LispVal
 parseNormalList = List <$> sepBy parseExpr spaces
@@ -93,12 +83,52 @@ parseQuoted = do
 parseExpr :: Parser LispVal
 parseExpr = parseAtom <|> parseString <|> parseNumber <|> parseBool <|> parseList <|> parseQuoted
 
-readExpr :: String -> String
+readExpr :: String -> LispVal
 readExpr input = case parse parseExpr "lisp" input of
-                   Left err -> "No match: " ++ show err
-                   Right val -> "Found value"
+                   Left err -> String $ "No match: " ++ show err
+                   Right val -> val
+
+showVal :: LispVal -> String
+showVal (String contents) = "\"" ++ contents ++ "\""
+showVal (Atom name) = name
+showVal (Number contents) = show contents
+showVal (Bool True) = "#t"
+showVal (Bool False) = "#f"
+showVal (List contents) = "(" ++ unwordsList contents ++ ")"
+showVal (DottedList head tail) = "(" ++ unwordsList head ++ " . " ++ showVal tail ++ ")"
+
+unwordsList :: [LispVal] -> String
+unwordsList = unwords . map showVal
+
+eval :: LispVal -> LispVal
+eval val@(String _) = val
+eval val@(Number _) = val
+eval val@(Bool _) = val
+eval (List [Atom "quote", val]) = val
+eval (List (Atom func : args)) = apply func $ map eval args
+
+apply :: String -> [LispVal] -> LispVal
+apply func args = maybe (Bool False) ($ args) $ lookup func primitives
+
+primitives :: [(String, [LispVal] -> LispVal)]
+primitives =
+  [("+", numericBinop (+))
+    , ("-", numericBinop (-))
+    , ("*", numericBinop (*))
+    , ("/", numericBinop div)
+    , ("mod", numericBinop mod)
+    , ("quotient", numericBinop quot)
+    , ("remainder", numericBinop rem)]
+
+numericBinop :: (Integer -> Integer -> Integer) -> [LispVal] -> LispVal
+numericBinop op params = Number $ foldl1 op $ map unpackNum params
+
+unpackNum :: LispVal -> Integer
+unpackNum (Number n) = n
+unpackNum (List [n]) = unpackNum n
+unpackNum _ = 0
 
 main :: IO ()
 main = do
   (expr:_) <- getArgs
-  putStrLn (readExpr expr)
+  (print . eval . readExpr) expr
